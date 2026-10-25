@@ -10,18 +10,18 @@ echo "  ▶ Устанавливаю Vision в $DIR"
 mkdir -p "$DIR"
 curl -fsSL "$BASE/vision.py?$(date +%s)" -o "$DIR/vision.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/Maksat-221/vizhen/main/mac/vision.py" -o "$DIR/vision.py"
 
-if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
-  echo ""
-  echo "  ✖ На Mac нет Python 3. Сейчас откроется окно установки инструментов Apple — нажми «Установить»."
-  echo "    Когда закончится, запусти эту же команду ещё раз."
-  xcode-select --install 2>/dev/null || true
-  exit 1
+# Python ставим сами через uv: не нужны ни инструменты Apple, ни пароль администратора
+export PATH="$HOME/.local/bin:$PATH"
+export UV_PYTHON_PREFERENCE=only-managed
+if ! command -v uv >/dev/null 2>&1; then
+  echo "  ▶ Скачиваю установщик Python (uv)…"
+  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null
+  export PATH="$HOME/.local/bin:$PATH"
 fi
 
-echo "  ▶ Ставлю библиотеки (минута-две)…"
-[ -d "$DIR/venv" ] || python3 -m venv "$DIR/venv"
-"$DIR/venv/bin/python" -m pip install -q --upgrade pip
-"$DIR/venv/bin/python" -m pip install -q sounddevice numpy requests
+echo "  ▶ Ставлю Python и библиотеки (1–3 минуты)…"
+[ -x "$DIR/venv/bin/python" ] || uv venv -q --python 3.12 "$DIR/venv"
+uv pip install -q --python "$DIR/venv/bin/python" sounddevice numpy requests
 
 cat > "$DIR/Vision.command" <<EOF
 #!/bin/bash
