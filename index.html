@@ -89,6 +89,18 @@ button{cursor:pointer}
   -webkit-mask:radial-gradient(circle, transparent 61%, #000 62%);mask:radial-gradient(circle, transparent 61%, #000 62%);animation:spin 1s linear infinite}
 .orb[data-state="speaking"]{animation:breathe 1.1s ease-in-out infinite}
 .orb[data-state="standby"]::before{border:2px solid var(--gold);animation:ring 2.6s ease-out infinite}
+.dockrow{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.talkbtn{border:0;background:var(--ink);color:var(--bg);border-radius:999px;padding:7px 16px;font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+.talkbtn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+.talk{position:fixed;inset:0;z-index:25;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;
+  padding:max(24px,env(safe-area-inset-top,0px)) max(24px,env(safe-area-inset-right,0px)) max(24px,env(safe-area-inset-bottom,0px)) max(24px,env(safe-area-inset-left,0px))}
+.talk .orb{--s:min(48vw,200px)}
+.talk .orb svg{width:28%;height:28%}
+.talk-name{font-family:var(--font-display);font-weight:700;font-size:20px}
+.talk-status{font-size:15px;color:var(--gold);font-weight:600;min-height:1.4em}
+.talk-sub{font-size:17px;max-width:32ch;min-height:4.4em;color:var(--ink);text-wrap:balance;overflow-wrap:anywhere}
+.talk-sub.me{color:var(--muted);font-style:italic}
+.talk-end{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:12px 28px;font-weight:700;font-size:15px;color:var(--danger)}
 .wake{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:7px 14px;font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px;color:var(--muted)}
 .wake::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--line)}
 .wake[aria-pressed="true"]{color:var(--ink);border-color:var(--gold)}
@@ -165,7 +177,10 @@ label.check input{width:20px;height:20px;accent-color:var(--sky)}
       <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
     </button>
     <div class="hint" id="hint"></div>
-    <button class="wake" id="wakeBtn" type="button" aria-pressed="false"></button>
+    <div class="dockrow">
+      <button class="talkbtn" id="talkBtn" type="button"><svg viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg><span id="talkLbl"></span></button>
+      <button class="wake" id="wakeBtn" type="button" aria-pressed="false"></button>
+    </div>
     <form class="typebar" id="typebar">
       <input id="text" autocomplete="off" enterkeyhint="send">
       <button id="sendBtn" type="submit"></button>
@@ -191,6 +206,7 @@ label.check input{width:20px;height:20px;accent-color:var(--sky)}
     <label class="f"><span data-t="sPersona"></span><textarea id="sPersona" maxlength="400"></textarea></label>
     <label class="f"><span data-t="sCity"></span><input id="sCity" maxlength="60"></label>
     <label class="check"><input type="checkbox" id="sVoice"><span data-t="sVoice"></span></label>
+    <label class="check"><input type="checkbox" id="sWeb"><span data-t="sWeb"></span></label>
     <label class="check"><input type="checkbox" id="sKeep"><span data-t="sKeep"></span></label>
     <label class="f"><span data-t="sRate"></span><input type="range" id="sRate" min="0.7" max="1.4" step="0.05"></label>
     <label class="check"><input type="checkbox" id="sNice"><span data-t="sNice"></span></label>
@@ -218,6 +234,16 @@ label.check input{width:20px;height:20px;accent-color:var(--sky)}
   </div>
 </div>
 
+<div class="talk" id="talk" hidden>
+  <div class="talk-name" id="talkName"></div>
+  <button class="orb" id="talkOrb" data-state="idle" aria-label="Talk">
+    <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+  </button>
+  <div class="talk-status" id="talkStatus"></div>
+  <div class="talk-sub" id="talkSub"></div>
+  <button class="talk-end" id="talkEnd" type="button"></button>
+</div>
+
 <div class="alarm" id="alarm" hidden>
   <div class="k" id="alarmKind"></div>
   <div class="t" id="alarmText"></div>
@@ -232,7 +258,7 @@ const KEY = "tumar.v1";
 
 /* ---------- state ---------- */
 const DEF = {
-  settings:{ name:"Вижен", persona:"", lang:"ru", city:"", voice:true, keep:false, wake:false, rate:1, apiKey:"", model:"claude-haiku-5-5", sttKey:"", sttModel:"gpt-4o-transcribe", vocab:"", nice:true, ttsVoice:"ash" },
+  settings:{ name:"Вижен", persona:"", lang:"ru", city:"", voice:true, keep:false, wake:false, rate:1, apiKey:"", model:"claude-haiku-5-5", sttKey:"", sttModel:"gpt-4o-transcribe", vocab:"", nice:true, ttsVoice:"ash", web:true },
   notes:[], timers:[], history:[]
 };
 let S;
@@ -304,17 +330,20 @@ const T = {
     limit:"Too many requests. Wait a moment.", denied:"Claude access wasn't allowed. You can paste your own API key in settings." }
 };
 const T2 = {
-  ru:{ sNice:"Живой голос OpenAI (нужен ключ OpenAI ниже)", sTtsVoice:"Голос", nVoice:"Без ключа говорит встроенный голос телефона. На iPhone его можно улучшить: Настройки → Универсальный доступ → Устный контент → Голоса → Русский → скачай «Улучшенный» голос.",
+  ru:{ talk:"Разговор", talkEnd:"Завершить", talkPaused:"Нажми на шар, чтобы продолжить", sWeb:"Искать в интернете (новости, курсы, спорт, погода в мире)",
+    sNice:"Живой голос OpenAI (нужен ключ OpenAI ниже)", sTtsVoice:"Голос", nVoice:"Без ключа говорит встроенный голос телефона. На iPhone его можно улучшить: Настройки → Универсальный доступ → Устный контент → Голоса → Русский → скачай «Улучшенный» голос.",
     sStt:"Распознавание речи", sSttKey:"Ключ OpenAI для точного распознавания", sSttModel:"Модель распознавания", sVocab:"Мои слова: имена, казахские и редкие слова через запятую",
     nStt:"Без ключа речь распознаёт браузер (на iPhone это диктовка Apple), и казахский он понимает плохо. С ключом OpenAI запись уходит в gpt-4o-transcribe: он хорошо понимает казахский, русский, английский и смешанную речь. Стоит около 0,6 цента за минуту.",
     sttBrowser:"Браузер", sttCloud:"OpenAI, точное", sttErr:"Не получилось распознать запись. Проверь ключ OpenAI в настройках.",
     standby:n=>`Жду «${n}»…`, wakeBtn:n=>`Отзываться на «${n}»`, wakeStalled:"Браузер остановил прослушивание. Нажми «Отзываться», чтобы включить снова.", wakeHint:n=>`Скажи «${n}» и сразу вопрос, или просто «${n}» и подожди сигнал.` },
-  kk:{ sNice:"OpenAI тірі дауысы (төмендегі OpenAI кілті керек)", sTtsVoice:"Дауыс", nVoice:"Кілтсіз телефонның кірістірілген дауысы сөйлейді. iPhone-да оны жақсартуға болады: Баптаулар → Арнайы мүмкіндіктер → Ауызша мазмұн → Дауыстар → «Жақсартылған» дауысты жүкте.",
+  kk:{ talk:"Сөйлесу", talkEnd:"Аяқтау", talkPaused:"Жалғастыру үшін шарды бас", sWeb:"Интернеттен іздеу (жаңалықтар, бағам, спорт)",
+    sNice:"OpenAI тірі дауысы (төмендегі OpenAI кілті керек)", sTtsVoice:"Дауыс", nVoice:"Кілтсіз телефонның кірістірілген дауысы сөйлейді. iPhone-да оны жақсартуға болады: Баптаулар → Арнайы мүмкіндіктер → Ауызша мазмұн → Дауыстар → «Жақсартылған» дауысты жүкте.",
     sStt:"Сөзді тану", sSttKey:"Дәл тану үшін OpenAI кілті", sSttModel:"Тану моделі", sVocab:"Менің сөздерім: есімдер, қазақша және сирек сөздер, үтір арқылы",
     nStt:"Кілтсіз сөзді браузер таниды (iPhone-да Apple диктовкасы), ол қазақ тілін нашар түсінеді. OpenAI кілтімен жазба gpt-4o-transcribe-қа жіберіледі: ол қазақ, орыс, ағылшын және аралас сөйлеуді жақсы түсінеді. Минутына шамамен 0,6 цент.",
     sttBrowser:"Браузер", sttCloud:"OpenAI, дәл", sttErr:"Жазбаны тану мүмкін болмады. Баптаулардағы OpenAI кілтін тексер.",
     standby:n=>`«${n}» деп шақыруыңды күтемін…`, wakeBtn:n=>`«${n}» сөзіне жауап беру`, wakeStalled:"Браузер тыңдауды тоқтатты. Қайта қосу үшін батырманы бас.", wakeHint:n=>`«${n}» деп, бірден сұрағыңды айт немесе сигналды күт.` },
-  en:{ sNice:"Natural OpenAI voice (needs the OpenAI key below)", sTtsVoice:"Voice", nVoice:"Without a key the phone's built-in voice speaks. On iPhone you can improve it: Settings → Accessibility → Spoken Content → Voices → download an \"Enhanced\" voice.",
+  en:{ talk:"Conversation", talkEnd:"End", talkPaused:"Tap the orb to continue", sWeb:"Search the web (news, rates, sports)",
+    sNice:"Natural OpenAI voice (needs the OpenAI key below)", sTtsVoice:"Voice", nVoice:"Without a key the phone's built-in voice speaks. On iPhone you can improve it: Settings → Accessibility → Spoken Content → Voices → download an \"Enhanced\" voice.",
     sStt:"Speech recognition", sSttKey:"OpenAI key for accurate recognition", sSttModel:"Recognition model", sVocab:"My words: names, Kazakh and rare words, comma-separated",
     nStt:"Without a key the browser recognizes speech (Apple dictation on iPhone), and it handles Kazakh poorly. With an OpenAI key the recording goes to gpt-4o-transcribe, which handles Kazakh, Russian, English and mixed speech well. About 0.6 cents per minute.",
     sttBrowser:"Browser", sttCloud:"OpenAI, accurate", sttErr:"Couldn't transcribe the recording. Check the OpenAI key in settings.",
@@ -343,6 +372,10 @@ function setStatus(state){
   b.textContent = state === "idle" ? brainLabel() : state === "standby" ? T[S.settings.lang].standby(S.settings.name) : t(map[state]);
   if (state === "standby") $("hint").textContent = T[S.settings.lang].wakeHint(S.settings.name);
   $("status").append(b);
+  if (convo){
+    $("talkOrb").dataset.state = state === "standby" ? "idle" : state;
+    $("talkStatus").textContent = state === "idle" ? (convoEmpty >= 3 ? t("talkPaused") : "") : t(map[state] || "idle");
+  }
 }
 function scrollDown(){ log.scrollTop = log.scrollHeight; }
 function clearHello(){ if (!hasMessages){ log.innerHTML = ""; hasMessages = true; } }
@@ -351,7 +384,9 @@ function addMsg(who, text, cls){
   const d = document.createElement("div");
   d.className = "msg " + who + (cls ? " " + cls : "");
   d.textContent = text;
-  log.append(d); scrollDown(); return d;
+  log.append(d); scrollDown();
+  if (convo && cls !== "interim"){ const sub = $("talkSub"); sub.className = "talk-sub" + (who === "me" ? " me" : ""); sub.textContent = text; }
+  return d;
 }
 function addEvent(text){
   clearHello();
@@ -501,7 +536,8 @@ Now: ${localStamp(now)} (${now.toLocaleDateString("en-US",{weekday:"long"})}), t
 Rules:
 - Reply in the language the user just used (Russian, Kazakh or English). If unclear, use ${LANG[S.settings.lang].name}. Kazakh must be written in Kazakh Cyrillic.
 - Your reply is read aloud: 1-3 short sentences, plain text only, no markdown, lists, emoji or links. Round numbers so they are easy to say (e.g. "плюс 5 градусов").
-- Use the tools for time in other cities, weather, timers, reminders and notes. Never invent weather.
+- Use the tools for time in other cities, weather, timers, reminders and notes. Never invent weather.${brain() === "api" && S.settings.web ? "\n- You can search the web: use it for anything current or factual you are not sure about (news, prices, exchange rates, sports, schedules, people, places). Then answer in 1-3 spoken sentences without URLs." : ""}
+- In a live conversation you may answer a bit longer (up to 5 sentences) when the user asks to explain something, but stay conversational.
 - For reminders with a clock time, pass at_local as YYYY-MM-DDTHH:MM in local time; for "in N minutes" pass in_minutes.
 - If asked for something you cannot do on this phone (calls, messages, opening apps, music), say so in one sentence and offer what you can do.
 - If a tool fails, tell the user briefly in plain words.
@@ -565,21 +601,28 @@ async function askSample(text, ctl, setBubble){
   return r.text.split(/\n\s*\n/).pop() || r.text; // with tools, keep the final round's words
 }
 
+let webUnavailable = false;
 async function askApi(text, ctl){
   const msgs = S.history.slice(-12).map(m => ({role:m.role, content:m.content}));
   while (msgs.length && msgs[0].role !== "user") msgs.shift();
   msgs.push({role:"user", content:text});
   const tools = TOOLS.map(x => ({name:x.name, description:x.description, input_schema:x.inputSchema || {type:"object", properties:{}}}));
+  let useWeb = S.settings.web && !webUnavailable;
+  const apiTools = () => useWeb ? [...tools, {type:"web_search_20250305", name:"web_search", max_uses:3}] : tools;
   for (let round = 0; round < 5; round++){
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method:"POST", signal:ctl.signal,
       headers:{ "content-type":"application/json", "x-api-key":S.settings.apiKey.trim(), "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" },
-      body:JSON.stringify({ model:S.settings.model.trim() || DEF.settings.model, max_tokens:700, system:rules(), tools, messages:msgs })
+      body:JSON.stringify({ model:S.settings.model.trim() || DEF.settings.model, max_tokens:900, system:rules(), tools:apiTools(), messages:msgs })
     });
+    if (!res.ok && res.status === 400 && useWeb){ webUnavailable = true; useWeb = false; round--; continue; }
     if (!res.ok) { const e = new Error("api " + res.status); e.status = res.status; throw e; }
     const data = await res.json();
     msgs.push({role:"assistant", content:data.content});
     const uses = data.content.filter(b => b.type === "tool_use");
+    if (data.stop_reason === "pause_turn") continue;
+    if (uses.length) addEvent(L("Работаю…","Орындап жатырмын…","Working…"));
+    if (data.content.some(b => b.type === "server_tool_use")) addEvent(L("Искал в интернете","Интернеттен іздедім","Searched the web"));
     if (data.stop_reason !== "tool_use" || !uses.length)
       return data.content.filter(b => b.type === "text").map(b => b.text).join(" ").trim() || "…";
     const results = [];
@@ -688,7 +731,7 @@ function browserSpeak(text, done){
 }
 function speak(text, force){
   stopWake();
-  if ((!S.settings.voice && !force) || !text){ setStatus("idle"); afterTurn(force); return; }
+  if ((!S.settings.voice && !force && !convo) || !text){ setStatus("idle"); afterTurn(force); return; }
   stopSpeaking();
   let ended = false;
   const done = () => { if (ended) return; ended = true; if (orb.dataset.state === "speaking") setStatus("idle"); afterTurn(force); };
@@ -707,7 +750,7 @@ function speak(text, force){
 /* ---------- voice in ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, micBlocked = false, interimEl = null;
-function dictationTip(key){ $("hint").textContent = t(key); $("text").focus(); }
+function dictationTip(key){ $("hint").textContent = t(key); if (convo){ $("talkSub").className = "talk-sub me"; $("talkSub").textContent = t(key); } else $("text").focus(); }
 function listen(){
   if (useCloud()) { cloudListen(); return; }
   if (!SR){ dictationTip("noSR"); return; }
@@ -737,7 +780,7 @@ function listen(){
     if (interimEl){ interimEl.remove(); interimEl = null; }
     const said = (finalText || lastInterim).trim();
     if (orb.dataset.state === "listening") setStatus("idle");
-    if (said) ask(said); else afterTurn(true);
+    if (said){ convoEmpty = 0; ask(said); } else { convoEmpty++; afterTurn(true); }
   };
   try { rec.start(); } catch { setStatus("idle"); }
 }
@@ -775,7 +818,8 @@ async function cloudListen(){
   mr.onstop = async () => {
     stream.getTracks().forEach(x => x.stop()); try { src && src.disconnect(); } catch {}
     cloudRec = null;
-    if (!spoke || !chunks.length){ setStatus("idle"); afterTurn(true); return; }
+    if (!spoke || !chunks.length){ convoEmpty++; setStatus("idle"); afterTurn(true); return; }
+    convoEmpty = 0;
     const blob = new Blob(chunks, {type: mr.mimeType || mime || "audio/webm"});
     setStatus("thinking");
     try {
@@ -812,7 +856,7 @@ orb.onclick = () => {
   unlock();
   const st = orb.dataset.state;
   if (st === "listening"){ if (cloudRec) cloudRec.stop(); else { try { rec && rec.stop(); } catch {} } return; }
-  if (st === "speaking"){ stopSpeaking(); setStatus("idle"); afterTurn(true); return; }
+  if (st === "speaking"){ stopSpeaking(); setStatus("idle"); if (convo){ convoEmpty = 0; setTimeout(listen, 200); } else afterTurn(true); return; }
   if (st === "standby"){ stopWake(); setTimeout(listen, 200); return; }
   if (st === "thinking"){ busy && busy.abort(); setStatus("idle"); return; }
   listen();
@@ -848,6 +892,10 @@ function wakeMatch(text, re){
 let wakeRec = null, wakeStopping = false, quickFails = 0, wakeLock = null;
 const wakeAllowed = () => S.settings.wake && SR && !micBlocked;
 function afterTurn(onlyWake){
+  if (convo){
+    if (convoEmpty >= 3){ setStatus("idle"); return; }
+    setTimeout(() => { if (convo && !busy && !rec && !cloudRec) listen(); }, 300); return;
+  }
   if (!onlyWake && S.settings.keep && (SR || useCloud()) && !micBlocked){ setTimeout(listen, 250); return; }
   if (S.settings.wake) setTimeout(startWake, 350);
 }
@@ -914,6 +962,7 @@ async function holdScreen(on){
 function renderWake(){
   const b = $("wakeBtn"); if (!b) return;
   b.textContent = T[S.settings.lang].wakeBtn(S.settings.name);
+  $("talkLbl").textContent = t("talk");
   b.setAttribute("aria-pressed", String(!!S.settings.wake));
   holdScreen(!!S.settings.wake);
 }
@@ -927,6 +976,27 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) stopWake();
   else if (S.settings.wake){ holdScreen(true); startWake(); }
 });
+
+/* ---------- conversation mode (hands-free, like a voice call) ---------- */
+var convo = false, convoEmpty = 0;
+function startConvo(){
+  unlock(); stopWake();
+  convo = true; convoEmpty = 0;
+  $("talkName").textContent = S.settings.name; $("talkEnd").textContent = t("talkEnd"); $("talkSub").textContent = ""; $("talk").hidden = false;
+  holdScreen(true);
+  listen();
+}
+function endConvo(){
+  convo = false;
+  stopSpeaking(); if (busy) busy.abort();
+  if (cloudRec) cloudRec.stop(); try { rec && rec.abort(); } catch {}
+  $("talk").hidden = true; setStatus("idle");
+  holdScreen(!!S.settings.wake);
+  if (S.settings.wake) setTimeout(startWake, 400);
+}
+$("talkBtn").onclick = startConvo;
+$("talkEnd").onclick = endConvo;
+$("talkOrb").onclick = () => { convoEmpty = 0; orb.onclick(); };
 
 /* ---------- timers & alarms ---------- */
 let ringing = null, beepTimer = null;
@@ -1017,7 +1087,7 @@ $("openSettings").onclick = () => {
   $("sKey").value = s.apiKey; $("sModel").value = s.model;
   $("sSttKey").value = s.sttKey; $("sSttModel").value = s.sttModel; $("sVocab").value = s.vocab; $("sVocab").placeholder = "Алматы, ҰБТ, Оңай білім…";
   renderStt();
-  $("sNice").checked = s.nice; $("sTtsVoice").value = s.ttsVoice;
+  $("sNice").checked = s.nice; $("sWeb").checked = s.web; $("sTtsVoice").value = s.ttsVoice;
   renderBrain(); openSheet("settingsSheet");
 };
 const bind = (id, key, get) => $(id).addEventListener("input", () => { S.settings[key] = get($(id)); save(); if (key === "apiKey") renderBrain(); });
@@ -1033,6 +1103,7 @@ bind("sSttKey", "sttKey", el => el.value.trim());
 bind("sSttModel", "sttModel", el => el.value.trim());
 bind("sVocab", "vocab", el => el.value);
 bind("sNice", "nice", el => el.checked);
+bind("sWeb", "web", el => el.checked);
 bind("sTtsVoice", "ttsVoice", el => el.value);
 const renderStt = () => { $("sttBadge").textContent = useCloud() ? t("sttCloud") : t("sttBrowser"); };
 $("sSttKey").addEventListener("input", renderStt);
