@@ -8,7 +8,7 @@ BASE="https://maksat-221.github.io/vizhen/mac"
 echo ""
 echo "  ▶ Устанавливаю Vision в $DIR"
 mkdir -p "$DIR"
-curl -fsSL "$BASE/vision.py?$(date +%s)" -o "$DIR/vision.py"
+curl -fsSL "$BASE/vision.py?$(date +%s)" -o "$DIR/vision.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/Maksat-221/vizhen/main/mac/vision.py" -o "$DIR/vision.py"
 
 if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
   echo ""
