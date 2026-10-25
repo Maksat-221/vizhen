@@ -353,9 +353,9 @@ for (const l in T2) Object.assign(T[l], T2[l]);
 const t = k => T[S.settings.lang][k];
 const L = (ru, kk, en) => ({ru, kk, en})[S.settings.lang];
 const PERSONA_DEF = {
-  ru:"Дружелюбный и остроумный, говорит коротко и по делу, иногда шутит.",
-  kk:"Мейірімді әрі тапқыр, қысқа әрі нақты сөйлейді, кейде әзілдейді.",
-  en:"Friendly and witty, speaks briefly and to the point, jokes now and then."
+  ru:"Как ИИ-дворецкий из фильмов про супергероев: спокойный, безупречно вежливый, уверенный, с лёгким сухим юмором. Обращается к пользователю «сэр».",
+  kk:"Суперқаһармандар туралы фильмдердегі ЖИ-көмекші сияқты: сабырлы, өте сыпайы, сенімді, сәл әзілқой. Пайдаланушыға «мырза» деп жүгінеді.",
+  en:"Like the AI butler from superhero films: calm, impeccably polite, confident, with a light dry wit. Addresses the user as \"sir\"."
 };
 const persona = () => S.settings.persona.trim() || PERSONA_DEF[S.settings.lang];
 const detectLang = s => /[әғқңөұүһі]/i.test(s) ? "kk" : /[а-яё]/i.test(s) ? "ru" : "en";
@@ -387,6 +387,12 @@ function addMsg(who, text, cls){
   log.append(d); scrollDown();
   if (convo && cls !== "interim"){ const sub = $("talkSub"); sub.className = "talk-sub" + (who === "me" ? " me" : ""); sub.textContent = text; }
   return d;
+}
+let pendingUrl = null;
+function addLink(text, url){
+  clearHello();
+  const a = document.createElement("a"); a.className = "event"; a.href = url; a.target = "_blank"; a.rel = "noopener"; a.textContent = text; a.style.color = "var(--sky)";
+  log.append(a); scrollDown();
 }
 function addEvent(text){
   clearHello();
@@ -519,6 +525,18 @@ const TOOLS = [
   { name:"cancel_timer", description:"Cancel a timer or reminder by id (use list_timers first).",
     inputSchema:{type:"object", properties:{id:{type:"string"}}, required:["id"]},
     execute(i){ const n = S.timers.length; S.timers = S.timers.filter(x => x.id !== String(i.id)); save(); renderTasks(); if (n === S.timers.length) throw new Error("not found"); addEvent(L("Отменено","Болдырылмады","Cancelled")); return "ok"; } },
+  { name:"open_on_phone", description:"Do something on the phone by opening another app: play music or video on YouTube (default for 'включи музыку'), Apple Music or Spotify; open Maps; Google search; a website; call a phone number; open WhatsApp, Telegram or Instagram. It opens after you finish speaking and leaves this app.",
+    inputSchema:{type:"object", properties:{action:{type:"string", enum:["youtube","apple_music","spotify","maps","google","website","call","whatsapp","telegram","instagram"]}, query:{type:"string", description:"search text, place, URL or phone number"}}, required:["action"]},
+    execute(i){
+      const a = String(i.action), x = String(i.query || "").trim(), e = encodeURIComponent(x);
+      const url = ({ youtube:"https://www.youtube.com/results?search_query=" + (e || encodeURIComponent("музыка")), apple_music:"https://music.apple.com/search?term=" + e,
+        spotify:"https://open.spotify.com/search/" + e, maps:"https://maps.apple.com/?q=" + e, google:"https://www.google.com/search?q=" + e,
+        website:/^https?:\/\//.test(x) ? x : "https://" + x, call:"tel:" + x.replace(/[^\d+]/g, ""), whatsapp:x ? "https://wa.me/" + x.replace(/\D/g, "") : "https://wa.me/",
+        telegram:"tg://", instagram:"instagram://" })[a];
+      if (!url) throw new Error("unknown action");
+      pendingUrl = url; addLink(L("Открыть","Ашу","Open") + ": " + (x || a), url);
+      return "will open after your reply";
+    } },
   { name:"add_note", description:"Save a note for the user.",
     inputSchema:{type:"object", properties:{text:{type:"string"}}, required:["text"]},
     execute(i){ const n = {id:uid(), text:String(i.text).slice(0,1000), at:Date.now()}; S.notes.unshift(n); save(); renderTasks(); addEvent(L("Заметка сохранена","Жазба сақталды","Note saved")); return {id:n.id}; } },
@@ -539,7 +557,7 @@ Rules:
 - Use the tools for time in other cities, weather, timers, reminders and notes. Never invent weather.${brain() === "api" && S.settings.web ? "\n- You can search the web: use it for anything current or factual you are not sure about (news, prices, exchange rates, sports, schedules, people, places). Then answer in 1-3 spoken sentences without URLs." : ""}
 - In a live conversation you may answer a bit longer (up to 5 sentences) when the user asks to explain something, but stay conversational.
 - For reminders with a clock time, pass at_local as YYYY-MM-DDTHH:MM in local time; for "in N minutes" pass in_minutes.
-- If asked for something you cannot do on this phone (calls, messages, opening apps, music), say so in one sentence and offer what you can do.
+- Commands: to play music/video, open maps, search Google, open a site, call a number or open WhatsApp/Telegram/Instagram, call open_on_phone right away and confirm in one short phrase in character ("Включаю, сэр."). You cannot send messages or control phone settings: say so briefly.
 - If a tool fails, tell the user briefly in plain words.
 - The user's message comes from speech recognition and may contain mis-heard words: Kazakh words written with Russian or English spelling, mixed languages, or your own name heard as "fashion", "вижн", "визн" and similar (it is always you, ${S.settings.name} / Vision). Work out what was meant from the sound and context and answer that; mention the mishearing only if the meaning is truly unclear, then ask one short question.${S.settings.vocab.trim() ? "\n- Words this user often says (prefer them when a heard word sounds similar): " + S.settings.vocab.trim() : ""}`;
 }
@@ -892,6 +910,7 @@ function wakeMatch(text, re){
 let wakeRec = null, wakeStopping = false, quickFails = 0, wakeLock = null;
 const wakeAllowed = () => S.settings.wake && SR && !micBlocked;
 function afterTurn(onlyWake){
+  if (pendingUrl){ const u = pendingUrl; pendingUrl = null; if (convo) endConvo(); try { location.href = u; } catch {} return; }
   if (convo){
     if (convoEmpty >= 3){ setStatus("idle"); return; }
     setTimeout(() => { if (convo && !busy && !rec && !cloudRec) listen(); }, 300); return;
