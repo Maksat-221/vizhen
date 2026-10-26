@@ -260,13 +260,13 @@ def transcribe(audio):
         try:
             text = _stt_local(audio, prompt); _LOCAL_OK = True
             return "" if HALLUCINATIONS.search(text) else text
-        except ImportError:
+        except ImportError as e:
             _LOCAL_OK = False
-            say_line("!", "локальное распознавание недоступно на этом Mac — пробую другой способ", "red")
-    if CFG["openai_key"]:
-        return _stt_openai(audio)
+            say_line("!", f"Whisper на Mac не установлен ({e}) — слушаю через Gemini", "red")
     if CFG["gemini_key"]:
         return _stt_gemini(audio, prompt)
+    if CFG["openai_key"]:
+        return _stt_openai(audio)
     raise requests.RequestException("нет способа распознать речь")
 
 def _stt_gemini(audio, prompt):
