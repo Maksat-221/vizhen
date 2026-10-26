@@ -30,7 +30,8 @@ DEFAULT = {
     "anthropic_key": "",
     "openai_key": "",
     "brain": "gemini",
-    "gemini_model": "gemini-flash-latest",
+    "gemini_model": "gemini-2.5-flash",
+    "gemini_endpoint": "ai",
     "stt": "local",
     "local_model": "mlx-community/whisper-large-v3-turbo",
     "tts": "edge",
@@ -75,12 +76,31 @@ def save_cfg(cfg):
         json.dump(cfg, f, ensure_ascii=False, indent=2)
     os.chmod(CFG_PATH, 0o600)
 
+GEMINI_HOSTS = {
+    "ai": "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
+    "vertex": "https://aiplatform.googleapis.com/v1/publishers/google/models/{m}:generateContent",
+}
+
 def check_gemini(key):
-    try:
-        r = requests.get("https://generativelanguage.googleapis.com/v1beta/models", headers={"x-goog-api-key": key}, timeout=20)
-        return r.status_code == 200, (r.json().get("error", {}).get("message", "") if r.status_code != 200 else "")
-    except Exception as e:
-        return False, str(e)
+    """Tries the key on Google AI Studio and on Vertex AI (keys like AQ.…). Returns (ok, message, endpoint)."""
+    order = ["vertex", "ai"] if key.startswith("AQ.") else ["ai", "vertex"]
+    msg = ""
+    for ep in order:
+        for m in ("gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"):
+            try:
+                r = requests.post(GEMINI_HOSTS[ep].format(m=m), headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                                  json={"contents": [{"role": "user", "parts": [{"text": "ok"}]}]}, timeout=30)
+            except Exception as e:
+                msg = str(e); continue
+            if r.status_code == 200:
+                return True, "", ep, m
+            if r.status_code == 429:
+                return True, "лимит на минуту, но ключ рабочий", ep, m
+            try: msg = r.json().get("error", {}).get("message", r.text[:200])
+            except Exception: msg = r.text[:200]
+            if r.status_code != 404:
+                break
+    return False, msg, None, None
 
 def setup(cfg, force=False):
     tty_in = sys.stdin
@@ -97,9 +117,9 @@ def setup(cfg, force=False):
         while True:
             k = re.sub(r"\s+", "", ask("Вставь ключ Gemini и нажми Enter (Enter без ключа — пропустить): "))
             if not k: break
-            ok, msg = check_gemini(k)
+            ok, msg, ep, model = check_gemini(k)
             if ok:
-                cfg["gemini_key"], cfg["brain"] = k, "gemini"
+                cfg["gemini_key"], cfg["brain"], cfg["gemini_endpoint"], cfg["gemini_model"] = k, "gemini", ep, model
                 print(f"{C['gold']}  ✔ Ключ Gemini работает{C['x']}"); break
             print(f"{C['red']}  ✖ Google не принял ключ: {msg[:160]}{C['x']}")
     if force:
@@ -625,12 +645,12 @@ def ask_claude(text):
     del HISTORY[:-16]
     return reply
 
-GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
+GEMINI_MODELS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]
 def gemini_call(body):
     tried = [CFG["gemini_model"]] + [m for m in GEMINI_MODELS if m != CFG["gemini_model"]]
     last = ""
     for m in tried:
-        r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
+        r = requests.post(GEMINI_HOSTS.get(CFG.get("gemini_endpoint", "ai"), GEMINI_HOSTS["ai"]).format(m=m),
                           headers={"x-goog-api-key": CFG["gemini_key"], "Content-Type": "application/json"}, json=body, timeout=90)
         if r.status_code == 404:
             last = r.text[:200]; continue
@@ -660,7 +680,7 @@ def gemini_tools():
 def t_search(i):
     q = str(i.get("query", ""))
     data = gemini_call({"contents": [{"role": "user", "parts": [{"text": f"Найди в интернете актуальную информацию и ответь кратко (3-5 фактов, с цифрами и датами): {q}"}]}],
-                        "tools": [{"google_search": {}}]})
+                        "tools": [{"googleSearch": {}}]})
     return "".join(p.get("text", "") for p in data["candidates"][0]["content"].get("parts", []))[:3000]
 
 SEARCH_SPEC = {"name": "search_internet", "description": "Search the internet for current information: news, prices, exchange rates, sports results, schedules, facts about people and places. Returns a short summary.",
