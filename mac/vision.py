@@ -47,9 +47,15 @@ def load_cfg():
     cfg = dict(DEFAULT)
     try:
         with open(CFG_PATH, encoding="utf-8") as f:
-            cfg.update(json.load(f))
-    except Exception:
+            raw = f.read()
+        raw = raw.replace("\u201c", '"').replace("\u201d", '"')   # TextEdit "smart quotes"
+        cfg.update(json.loads(raw))
+    except FileNotFoundError:
         pass
+    except Exception as e:
+        print(f"{C['red']}Файл настроек {CFG_PATH} повреждён: {e}. Запусти: ~/Vision/Vision.command --setup{C['x']}")
+    for k in ("anthropic_key", "openai_key"):
+        cfg[k] = re.sub(r"\s+", "", str(cfg.get(k, "")))
     return cfg
 
 def save_cfg(cfg):
@@ -204,6 +210,13 @@ def transcribe(audio):
                       headers={"Authorization": "Bearer " + CFG["openai_key"]},
                       files={"file": ("speech.wav", to_wav(audio), "audio/wav")},
                       data={"model": CFG["stt_model"], "prompt": prompt}, timeout=40)
+    if r.status_code == 401:
+        try: msg = r.json()["error"]["message"]
+        except Exception: msg = r.text[:200]
+        print(f"{C['red']}OpenAI не принял ключ: {msg}\nИсправь ключ: ~/Vision/Vision.command --setup{C['x']}")
+        sys.exit(1)
+    if r.status_code == 429:
+        raise requests.RequestException("OpenAI: закончились деньги на балансе или слишком много запросов (429). Пополни баланс на platform.openai.com → Billing.")
     r.raise_for_status()
     return (r.json().get("text") or "").strip()
 
