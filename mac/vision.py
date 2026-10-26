@@ -56,6 +56,11 @@ def load_cfg():
         print(f"{C['red']}Файл настроек {CFG_PATH} повреждён: {e}. Запусти: ~/Vision/Vision.command --setup{C['x']}")
     for k in ("anthropic_key", "openai_key"):
         cfg[k] = re.sub(r"\s+", "", str(cfg.get(k, "")))
+    if cfg["openai_key"].startswith("sk-ant-") and not cfg["anthropic_key"].startswith("sk-ant-"):
+        cfg["anthropic_key"], cfg["openai_key"] = cfg["openai_key"], cfg["anthropic_key"]   # keys swapped
+    if cfg["openai_key"].startswith("sk-ant-"):
+        print(f"{C['red']}В поле OpenAI стоит ключ Anthropic (sk-ant-…). Нужен ключ OpenAI с platform.openai.com/api-keys.{C['x']}")
+        cfg["openai_key"] = ""
     return cfg
 
 def save_cfg(cfg):
@@ -80,7 +85,10 @@ def setup(cfg, force=False):
         if k: cfg["anthropic_key"] = k
     if force or not cfg["openai_key"]:
         print(f"\n{C['b']}Ключ OpenAI{C['x']} — слух и голос (распознавание и озвучка). Создай на platform.openai.com → API keys.")
-        k = ask("Вставь ключ (sk-...), текст не отображается: ", secret=True)
+        k = re.sub(r"\s+", "", ask("Вставь ключ (sk-...), текст не отображается: ", secret=True))
+        if k.startswith("sk-ant-"):
+            print(f"{C['red']}Это ключ Anthropic, а нужен ключ OpenAI. Возьми его на platform.openai.com/api-keys.{C['x']}")
+            k = re.sub(r"\s+", "", ask("Вставь ключ OpenAI (sk-proj-...): ", secret=True))
         if k: cfg["openai_key"] = k
     if force:
         c = ask(f"Город для погоды [{cfg['city']}]: ")
