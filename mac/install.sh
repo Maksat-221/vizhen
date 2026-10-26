@@ -8,7 +8,9 @@ BASE="https://maksat-221.github.io/vizhen/mac"
 echo ""
 echo "  ▶ Устанавливаю Vision в $DIR"
 mkdir -p "$DIR"
-curl -fsSL "$BASE/vision.py?$(date +%s)" -o "$DIR/vision.py" 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/Maksat-221/vizhen/main/mac/vision.py" -o "$DIR/vision.py"
+SHA=$(curl -fsSL "https://api.github.com/repos/Maksat-221/vizhen/commits/main" 2>/dev/null | grep -m1 '"sha"' | cut -d'"' -f4)
+curl -fsSL "https://raw.githubusercontent.com/Maksat-221/vizhen/${SHA:-main}/mac/vision.py" -o "$DIR/vision.py"
+grep -q "gemini_key" "$DIR/vision.py" && echo "  ✔ Скачана новая версия (${SHA:0:7})"
 
 # Python ставим сами через uv: не нужны ни инструменты Apple, ни пароль администратора
 export PATH="$HOME/.local/bin:$PATH"

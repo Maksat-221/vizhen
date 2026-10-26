@@ -63,6 +63,10 @@ def load_cfg():
         print(f"{C['red']}Файл настроек {CFG_PATH} повреждён: {e}. Запусти: ~/Vision/Vision.command --setup{C['x']}")
     for k in ("gemini_key", "anthropic_key", "openai_key"):
         cfg[k] = re.sub(r"\s+", "", str(cfg.get(k, "")))
+    for k in ("openai_key", "anthropic_key"):          # a Google key pasted into the wrong field
+        if cfg[k].startswith(("AQ.", "AIza")):
+            if not cfg["gemini_key"]: cfg["gemini_key"] = cfg[k]
+            cfg[k] = ""
     if cfg["openai_key"].startswith("sk-ant-") and not cfg["anthropic_key"].startswith("sk-ant-"):
         cfg["anthropic_key"], cfg["openai_key"] = cfg["openai_key"], cfg["anthropic_key"]   # keys swapped
     if cfg["openai_key"].startswith("sk-ant-"):
