@@ -21,7 +21,9 @@ fi
 
 echo "  ▶ Ставлю Python и библиотеки (1–3 минуты)…"
 [ -x "$DIR/venv/bin/python" ] || uv venv -q --python 3.12 "$DIR/venv"
-uv pip install -q --python "$DIR/venv/bin/python" sounddevice numpy requests
+uv pip install -q --python "$DIR/venv/bin/python" sounddevice numpy requests edge-tts
+echo "  ▶ Ставлю бесплатное распознавание речи (Whisper на этом Mac)…"
+uv pip install -q --python "$DIR/venv/bin/python" mlx-whisper || echo "  (Whisper не встал — будет распознавание через Gemini)"
 
 cat > "$DIR/Vision.command" <<EOF
 #!/bin/bash
@@ -32,6 +34,6 @@ ln -sf "$DIR/Vision.command" "$HOME/Desktop/Vision.command" 2>/dev/null || true
 
 echo ""
 echo "  ✔ Готово. Ярлык Vision.command лежит на Рабочем столе — двойной щелчок запускает ассистента."
-echo "  ▶ Первый запуск: вставь ключи Anthropic и OpenAI, потом разреши Терминалу доступ к микрофону."
+echo "  ▶ Первый запуск: вставь бесплатный ключ Gemini (aistudio.google.com/apikey), потом разреши Терминалу микрофон."
 echo ""
 exec "$DIR/venv/bin/python" "$DIR/vision.py" < /dev/tty

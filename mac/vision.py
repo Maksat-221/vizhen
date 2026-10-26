@@ -26,8 +26,14 @@ HOME = os.path.expanduser("~/Vision")
 CFG_PATH = os.path.join(HOME, "config.json")
 DEFAULT = {
     "name": "Вижен",
+    "gemini_key": "",
     "anthropic_key": "",
     "openai_key": "",
+    "brain": "gemini",
+    "gemini_model": "gemini-flash-latest",
+    "stt": "local",
+    "local_model": "mlx-community/whisper-large-v3-turbo",
+    "tts": "edge",
     "model": "claude-haiku-5-5",
     "stt_model": "gpt-4o-mini-transcribe",
     "voice": "onyx",
@@ -54,7 +60,7 @@ def load_cfg():
         pass
     except Exception as e:
         print(f"{C['red']}Файл настроек {CFG_PATH} повреждён: {e}. Запусти: ~/Vision/Vision.command --setup{C['x']}")
-    for k in ("anthropic_key", "openai_key"):
+    for k in ("gemini_key", "anthropic_key", "openai_key"):
         cfg[k] = re.sub(r"\s+", "", str(cfg.get(k, "")))
     if cfg["openai_key"].startswith("sk-ant-") and not cfg["anthropic_key"].startswith("sk-ant-"):
         cfg["anthropic_key"], cfg["openai_key"] = cfg["openai_key"], cfg["anthropic_key"]   # keys swapped
@@ -69,35 +75,43 @@ def save_cfg(cfg):
         json.dump(cfg, f, ensure_ascii=False, indent=2)
     os.chmod(CFG_PATH, 0o600)
 
+def check_gemini(key):
+    try:
+        r = requests.get("https://generativelanguage.googleapis.com/v1beta/models", headers={"x-goog-api-key": key}, timeout=20)
+        return r.status_code == 200, (r.json().get("error", {}).get("message", "") if r.status_code != 200 else "")
+    except Exception as e:
+        return False, str(e)
+
 def setup(cfg, force=False):
     tty_in = sys.stdin
     if not sys.stdin.isatty():
         try: tty_in = open("/dev/tty")
         except Exception: pass
-    def ask(prompt, secret=False):
-        if secret:
-            return getpass.getpass(prompt).strip()
+    def ask(prompt):
         print(prompt, end="", flush=True)
         return tty_in.readline().strip()
-    if force or not cfg["anthropic_key"]:
-        print(f"\n{C['b']}Ключ Anthropic{C['x']} — мозг ассистента. Создай на console.anthropic.com → API Keys.")
-        k = ask("Вставь ключ (sk-ant-...), текст не отображается: ", secret=True)
-        if k: cfg["anthropic_key"] = k
-    if force or not cfg["openai_key"]:
-        print(f"\n{C['b']}Ключ OpenAI{C['x']} — слух и голос (распознавание и озвучка). Создай на platform.openai.com → API keys.")
-        k = re.sub(r"\s+", "", ask("Вставь ключ (sk-...), текст не отображается: ", secret=True))
-        if k.startswith("sk-ant-"):
-            print(f"{C['red']}Это ключ Anthropic, а нужен ключ OpenAI. Возьми его на platform.openai.com/api-keys.{C['x']}")
-            k = re.sub(r"\s+", "", ask("Вставь ключ OpenAI (sk-proj-...): ", secret=True))
-        if k: cfg["openai_key"] = k
+    if force or not (cfg["gemini_key"] or cfg["anthropic_key"]):
+        print(f"\n{C['b']}Бесплатный ключ Google Gemini{C['x']} — мозг ассистента. Карта не нужна.")
+        print("  1) Открой https://aistudio.google.com/apikey и войди через Google")
+        print("  2) Нажми «Create API key» и скопируй ключ (начинается с AIza...)")
+        while True:
+            k = re.sub(r"\s+", "", ask("Вставь ключ Gemini и нажми Enter (Enter без ключа — пропустить): "))
+            if not k: break
+            ok, msg = check_gemini(k)
+            if ok:
+                cfg["gemini_key"], cfg["brain"] = k, "gemini"
+                print(f"{C['gold']}  ✔ Ключ Gemini работает{C['x']}"); break
+            print(f"{C['red']}  ✖ Google не принял ключ: {msg[:160]}{C['x']}")
     if force:
         c = ask(f"Город для погоды [{cfg['city']}]: ")
         if c: cfg["city"] = c
         v = ask(f"Слова, которые ты часто говоришь (имена, казахские слова), через запятую [{cfg['vocab']}]: ")
         if v: cfg["vocab"] = v
+    if not cfg["gemini_key"] and cfg["anthropic_key"]:
+        cfg["brain"] = "anthropic"
     save_cfg(cfg)
-    if not cfg["anthropic_key"] or not cfg["openai_key"]:
-        print(f"{C['red']}Без обоих ключей Вижен работать не сможет. Запусти: python3 vision.py --setup{C['x']}")
+    if not cfg["gemini_key"] and not cfg["anthropic_key"]:
+        print(f"{C['red']}Нужен ключ Gemini (бесплатно). Запусти: ~/Vision/Vision.command --setup{C['x']}")
         sys.exit(1)
 
 CFG = load_cfg()
@@ -209,7 +223,41 @@ def to_wav(audio):
     return buf.getvalue()
 
 # ---------------------------------------------------------------- hearing (OpenAI)
+HALLUCINATIONS = re.compile(r"(продолжение следует|субтитр|спасибо за просмотр|редактор|подписывайтесь|thank(s| you) for watching|amara\.org|dimatorzok)", re.I)
+_LOCAL_OK = None
+
+def _stt_local(audio, prompt):
+    import mlx_whisper
+    out = mlx_whisper.transcribe(audio.astype(np.float32) / 32768.0, path_or_hf_repo=CFG["local_model"],
+                                 initial_prompt=prompt, condition_on_previous_text=False, verbose=None)
+    return (out.get("text") or "").strip()
+
 def transcribe(audio):
+    global _LOCAL_OK
+    prompt = (f"Говорящий из Казахстана, говорит по-русски, по-казахски или по-английски. Ассистента зовут {CFG['name']}."
+              + (" Слова: " + CFG["vocab"].strip() + "." if CFG["vocab"].strip() else ""))
+    if CFG["stt"] == "local" and _LOCAL_OK is not False:
+        try:
+            text = _stt_local(audio, prompt); _LOCAL_OK = True
+            return "" if HALLUCINATIONS.search(text) else text
+        except ImportError:
+            _LOCAL_OK = False
+            say_line("!", "локальное распознавание недоступно на этом Mac — пробую другой способ", "red")
+    if CFG["openai_key"]:
+        return _stt_openai(audio)
+    if CFG["gemini_key"]:
+        return _stt_gemini(audio, prompt)
+    raise requests.RequestException("нет способа распознать речь")
+
+def _stt_gemini(audio, prompt):
+    import base64
+    body = {"contents": [{"role": "user", "parts": [
+        {"inline_data": {"mime_type": "audio/wav", "data": base64.b64encode(to_wav(audio)).decode()}},
+        {"text": prompt + " Запиши дословно, что сказано в аудио, без комментариев. Если речи нет — верни пустую строку."}]}]}
+    data = gemini_call(body)
+    return "".join(p.get("text", "") for p in data["candidates"][0]["content"].get("parts", [])).strip()
+
+def _stt_openai(audio):
     prompt = (f"Говорящий из Казахстана, говорит по-русски, по-казахски (қазақша) или по-английски, иногда смешивая. "
               f"Казахские слова пиши казахской кириллицей. Ассистента зовут {CFG['name']} (Vision).")
     if CFG["vocab"].strip():
@@ -256,13 +304,27 @@ def speak(text):
     with speak_lock:
         if MIC: MIC.muted = True
         try:
-            if not _speak_openai(text):
+            ok = False
+            if CFG["tts"] == "edge": ok = _speak_edge(text)
+            elif CFG["tts"] == "openai" and CFG["openai_key"]: ok = _speak_openai(text)
+            if not ok:
                 v = mac_voice(detect_lang(text))
                 subprocess.run(["say"] + (["-v", v] if v else []) + [text])
         finally:
             time.sleep(0.25)
             if MIC:
                 MIC.flush(); MIC.muted = False
+
+EDGE_VOICES = {"ru": "ru-RU-DmitryNeural", "kk": "kk-KZ-DauletNeural", "en": "en-GB-RyanNeural"}
+def _speak_edge(text):
+    try:
+        import asyncio, edge_tts
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f: path = f.name
+        asyncio.run(edge_tts.Communicate(text, EDGE_VOICES[detect_lang(text)], rate="-5%", pitch="-4Hz").save(path))
+        subprocess.run(["afplay", path]); os.unlink(path)
+        return True
+    except Exception:
+        return False
 
 def _speak_openai(text):
     lang = {"ru": "Russian", "kk": "Kazakh, with natural native Kazakh pronunciation", "en": "English"}[detect_lang(text)]
@@ -522,7 +584,7 @@ def system_prompt():
 - Команды выполняй через инструменты сразу, не переспрашивая, если смысл понятен. После действия подтверждай коротко, в своём стиле: «Включаю, сэр.», «Готово, сэр. Громкость тридцать процентов.»
 - Название приложения переводи в английское имя для macOS (Телеграм → Telegram, Сафари → Safari, Музыка → Music, Настройки → System Settings, Хром → Google Chrome).
 - «Включи музыку» без уточнений — включи на YouTube что-нибудь подходящее по времени суток и настроению.
-- Для погоды, времени в других городах, свежих новостей, курсов и спорта используй инструменты и поиск; ничего не выдумывай.
+- Для погоды, времени в других городах, свежих новостей, курсов и спорта используй инструменты и поиск (search_internet); ничего не выдумывай.
 - Текст пришёл из распознавания речи и может содержать ошибки: казахские слова русскими буквами, своё имя как «fashion» или «вижн». Догадывайся по звучанию и смыслу; переспрашивай одним коротким вопросом, только если совсем непонятно.
 - Если сказали «спасибо, всё» или «отдыхай» — коротко попрощайся (программа продолжит ждать твоего имени). Если просят выключиться совсем — вызови shutdown_assistant.
 - Отправлять сообщения, звонить, покупать и удалять файлы ты не умеешь: так и скажи.{vocab}"""
@@ -563,13 +625,85 @@ def ask_claude(text):
     del HISTORY[:-16]
     return reply
 
+GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
+def gemini_call(body):
+    tried = [CFG["gemini_model"]] + [m for m in GEMINI_MODELS if m != CFG["gemini_model"]]
+    last = ""
+    for m in tried:
+        r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
+                          headers={"x-goog-api-key": CFG["gemini_key"], "Content-Type": "application/json"}, json=body, timeout=90)
+        if r.status_code == 404:
+            last = r.text[:200]; continue
+        if r.status_code == 429:
+            raise requests.RequestException("Gemini: исчерпан бесплатный лимит запросов, подожди минуту")
+        if r.status_code in (400, 403) and "API key" in r.text:
+            raise requests.RequestException("Gemini не принял ключ. Запусти ~/Vision/Vision.command --setup")
+        r.raise_for_status()
+        CFG["gemini_model"] = m
+        return r.json()
+    raise requests.RequestException("Gemini: модель не найдена " + last)
+
+def _gschema(x):
+    if isinstance(x, dict):
+        return {k: (v.upper() if k == "type" and isinstance(v, str) else _gschema(v)) for k, v in x.items()}
+    return [_gschema(i) for i in x] if isinstance(x, list) else x
+
+def gemini_tools():
+    decls = []
+    for t in TOOL_SPEC + [SEARCH_SPEC]:
+        d = {"name": t["name"], "description": t["description"]}
+        if t["input_schema"]["properties"]:
+            d["parameters"] = _gschema(t["input_schema"])
+        decls.append(d)
+    return [{"functionDeclarations": decls}]
+
+def t_search(i):
+    q = str(i.get("query", ""))
+    data = gemini_call({"contents": [{"role": "user", "parts": [{"text": f"Найди в интернете актуальную информацию и ответь кратко (3-5 фактов, с цифрами и датами): {q}"}]}],
+                        "tools": [{"google_search": {}}]})
+    return "".join(p.get("text", "") for p in data["candidates"][0]["content"].get("parts", []))[:3000]
+
+SEARCH_SPEC = {"name": "search_internet", "description": "Search the internet for current information: news, prices, exchange rates, sports results, schedules, facts about people and places. Returns a short summary.",
+               "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}
+TOOL_FN["search_internet"] = t_search
+
+def ask_gemini(text):
+    contents = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]} for m in HISTORY[-12:]]
+    while contents and contents[0]["role"] != "user": contents.pop(0)
+    contents.append({"role": "user", "parts": [{"text": text}]})
+    reply = ""
+    for _ in range(6):
+        data = gemini_call({"systemInstruction": {"parts": [{"text": system_prompt()}]}, "contents": contents,
+                            "tools": gemini_tools(), "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.7}})
+        cands = data.get("candidates") or [{}]
+        parts = (cands[0].get("content") or {}).get("parts", [])
+        calls = [p["functionCall"] for p in parts if "functionCall" in p]
+        if not calls:
+            reply = " ".join(p.get("text", "") for p in parts if p.get("text") and not p.get("thought")).strip()
+            break
+        contents.append({"role": "model", "parts": parts})
+        resp = []
+        for c in calls:
+            out, err = run_tool(c["name"], c.get("args") or {})
+            resp.append({"functionResponse": {"name": c["name"], "response": {"error" if err else "result": out}}})
+        contents.append({"role": "user", "parts": resp})
+    reply = clean(reply) or "Готово, сэр."
+    HISTORY.extend([{"role": "user", "content": text}, {"role": "assistant", "content": reply}])
+    del HISTORY[:-16]
+    return reply
+
+def ask_brain(text):
+    if CFG["brain"] == "gemini" and CFG["gemini_key"]:
+        return ask_gemini(text)
+    return ask_claude(text)
+
 def handle(text):
     say_line("Вы", text, "b")
     try:
-        speak(ask_claude(text))
+        speak(ask_brain(text))
     except requests.RequestException as e:
         say_line("ошибка", str(e)[:200], "red")
-        speak("Сэр, связь с сервером пропала. Попробуйте ещё раз.")
+        speak("Сэр, бесплатный лимит на минуту исчерпан. Дайте мне немного передохнуть." if "лимит" in str(e) else "Сэр, связь с сервером пропала. Попробуйте ещё раз.")
 
 # ---------------------------------------------------------------- main loops
 def conversation(mic, first_text):
@@ -636,6 +770,14 @@ def main():
         print(f"{C['red']}Нет доступа к микрофону: {e}\nОткрой Системные настройки → Конфиденциальность и безопасность → Микрофон и разреши Терминалу.{C['x']}")
         sys.exit(1)
     MIC.calibrate()
+    if CFG["stt"] == "local":
+        say_line("", "загружаю распознавание речи (в первый раз скачается ~1.6 ГБ, подожди)…")
+        try:
+            _stt_local(np.zeros(RATE // 2, dtype=np.int16), "")
+        except ImportError:
+            pass
+        except Exception as e:
+            say_line("!", f"локальное распознавание: {e}", "red")
     h = datetime.datetime.now().hour
     speak(("Доброе утро" if 5 <= h < 12 else "Добрый день" if 12 <= h < 18 else "Добрый вечер") + f", сэр. {CFG['name']} на связи.")
     try:
