@@ -651,21 +651,31 @@ def ask_claude(text):
 
 GEMINI_MODELS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]
 def gemini_call(body):
-    tried = [CFG["gemini_model"]] + [m for m in GEMINI_MODELS if m != CFG["gemini_model"]]
+    """Tries the saved endpoint/model first, then the others; remembers what worked."""
+    eps = [CFG.get("gemini_endpoint", "ai")] + [e for e in GEMINI_HOSTS if e != CFG.get("gemini_endpoint", "ai")]
+    if CFG["gemini_key"].startswith("AQ.") and "gemini_checked" not in CFG:
+        eps = ["vertex", "ai"]
+    models = [CFG["gemini_model"]] + [m for m in GEMINI_MODELS if m != CFG["gemini_model"]]
     last = ""
-    for m in tried:
-        r = requests.post(GEMINI_HOSTS.get(CFG.get("gemini_endpoint", "ai"), GEMINI_HOSTS["ai"]).format(m=m),
-                          headers={"x-goog-api-key": CFG["gemini_key"], "Content-Type": "application/json"}, json=body, timeout=90)
-        if r.status_code == 404:
-            last = r.text[:200]; continue
-        if r.status_code == 429:
-            raise requests.RequestException("Gemini: исчерпан бесплатный лимит запросов, подожди минуту")
-        if r.status_code in (400, 403) and "API key" in r.text:
-            raise requests.RequestException("Gemini не принял ключ. Запусти ~/Vision/Vision.command --setup")
-        r.raise_for_status()
-        CFG["gemini_model"] = m
-        return r.json()
-    raise requests.RequestException("Gemini: модель не найдена " + last)
+    for ep in eps:
+        for m in models:
+            try:
+                r = requests.post(GEMINI_HOSTS[ep].format(m=m), headers={"x-goog-api-key": CFG["gemini_key"], "Content-Type": "application/json"},
+                                  json=body, timeout=35)
+            except requests.RequestException as e:
+                last = f"{ep}/{m}: нет ответа"; continue
+            if r.status_code in (404, 500, 502, 503, 504):
+                last = f"{ep}/{m}: {r.status_code}"; continue
+            if r.status_code == 429:
+                raise requests.RequestException("Gemini: исчерпан бесплатный лимит запросов, подожди минуту")
+            if r.status_code in (400, 401, 403) and re.search(r"API.?key|UNAUTHENTICATED|PERMISSION_DENIED|not enabled|SERVICE_DISABLED", r.text, re.I):
+                last = f"{ep}: {r.text[:160]}"; break
+            r.raise_for_status()
+            if CFG.get("gemini_endpoint") != ep or CFG["gemini_model"] != m or "gemini_checked" not in CFG:
+                CFG.update(gemini_endpoint=ep, gemini_model=m, gemini_checked=True); save_cfg(CFG)
+                say_line("✔", f"Gemini: {ep} / {m}", "gold")
+            return r.json()
+    raise requests.RequestException("Gemini не отвечает — " + last)
 
 def _gschema(x):
     if isinstance(x, dict):
