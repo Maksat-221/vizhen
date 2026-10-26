@@ -90,7 +90,7 @@ def setup(cfg, force=False):
     def ask(prompt):
         print(prompt, end="", flush=True)
         return tty_in.readline().strip()
-    if force or not (cfg["gemini_key"] or cfg["anthropic_key"]):
+    if force or not cfg["gemini_key"]:
         print(f"\n{C['b']}Бесплатный ключ Google Gemini{C['x']} — мозг ассистента. Карта не нужна.")
         print("  1) Открой https://aistudio.google.com/apikey и войди через Google")
         print("  2) Нажми «Create API key» и скопируй ключ (начинается с AIza...)")
